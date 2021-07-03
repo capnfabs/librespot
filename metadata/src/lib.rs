@@ -135,8 +135,8 @@ pub struct Track {
     pub id: SpotifyId,
     pub name: String,
     pub duration: i32,
-    pub album: SpotifyId,
-    pub artists: Vec<SpotifyId>,
+    pub album: Album,
+    pub artists: Vec<Artist>,
     pub files: HashMap<FileFormat, FileId>,
     pub alternatives: Vec<SpotifyId>,
     pub available: bool,
@@ -146,7 +146,7 @@ pub struct Track {
 pub struct Album {
     pub id: SpotifyId,
     pub name: String,
-    pub artists: Vec<SpotifyId>,
+    pub artists: Vec<Artist>,
     pub tracks: Vec<SpotifyId>,
     pub covers: Vec<FileId>,
 }
@@ -203,7 +203,7 @@ impl Metadata for Track {
             .get_artist()
             .iter()
             .filter(|artist| artist.has_gid())
-            .map(|artist| SpotifyId::from_raw(artist.get_gid()).unwrap())
+            .map(|artist| Artist::parse(artist, session))
             .collect::<Vec<_>>();
 
         let files = msg
@@ -221,7 +221,7 @@ impl Metadata for Track {
             id: SpotifyId::from_raw(msg.get_gid()).unwrap(),
             name: msg.get_name().to_owned(),
             duration: msg.get_duration(),
-            album: SpotifyId::from_raw(msg.get_album().get_gid()).unwrap(),
+            album: Album::parse(msg.get_album(), session),
             artists,
             files,
             alternatives: msg
@@ -241,12 +241,12 @@ impl Metadata for Album {
         format!("hm://metadata/3/album/{}", id.to_base16())
     }
 
-    fn parse(msg: &Self::Message, _: &Session) -> Self {
+    fn parse(msg: &Self::Message, session: &Session) -> Self {
         let artists = msg
             .get_artist()
             .iter()
             .filter(|artist| artist.has_gid())
-            .map(|artist| SpotifyId::from_raw(artist.get_gid()).unwrap())
+            .map(|artist| Artist::parse(artist, session))
             .collect::<Vec<_>>();
 
         let tracks = msg
