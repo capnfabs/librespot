@@ -134,9 +134,13 @@ pub trait Metadata: Send + Sized + 'static {
 pub struct Track {
     pub id: SpotifyId,
     pub name: String,
+    // milliseconds
     pub duration: i32,
+    pub popularity: i32,
     pub album: Album,
     pub artists: Vec<Artist>,
+    pub track_number: i32,
+    pub disc_number: i32,
     pub files: HashMap<FileFormat, FileId>,
     pub alternatives: Vec<SpotifyId>,
     pub available: bool,
@@ -221,7 +225,10 @@ impl Metadata for Track {
             id: SpotifyId::from_raw(msg.get_gid()).unwrap(),
             name: msg.get_name().to_owned(),
             duration: msg.get_duration(),
+            popularity: msg.get_popularity(),
             album: Album::parse(msg.get_album(), session),
+            track_number: msg.get_number(),
+            disc_number: msg.get_disc_number(),
             artists,
             files,
             alternatives: msg

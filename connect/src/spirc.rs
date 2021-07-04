@@ -43,6 +43,24 @@ enum SpircPlayStatus {
 type BoxedFuture<T> = Pin<Box<dyn FusedFuture<Output = T> + Send>>;
 type BoxedStream<T> = Pin<Box<dyn FusedStream<Item = T> + Send>>;
 
+pub type ContextChangedEventChannel = mpsc::UnboundedReceiver<ContextChangedEvent>;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContextChangedEvent {
+    pub context_uri: String,
+    // This is 0-indexed, i.e. the 0th track is the first one.
+    pub playing_track_index: u32,
+}
+
+impl ContextChangedEvent {
+    fn from_state(state: &State) -> ContextChangedEvent {
+        ContextChangedEvent {
+            context_uri: state.get_context_uri().to_owned(),
+            playing_track_index: state.get_playing_track_index(),
+        }
+    }
+}
+
 struct SpircTask {
     player: Player,
     mixer: Box<dyn Mixer>,
@@ -60,6 +78,7 @@ struct SpircTask {
     sender: MercurySender,
     commands: Option<mpsc::UnboundedReceiver<SpircCommand>>,
     player_events: Option<PlayerEventChannel>,
+    context_event_sender: mpsc::UnboundedSender<ContextChangedEvent>,
 
     shutdown: bool,
     session: Session,
@@ -225,7 +244,7 @@ impl Spirc {
         session: Session,
         player: Player,
         mixer: Box<dyn Mixer>,
-    ) -> (Spirc, impl Future<Output = ()>) {
+    ) -> (Spirc, impl Future<Output = ()>, ContextChangedEventChannel) {
         debug!("new Spirc[{}]", session.session_id());
 
         let ident = session.device_id().to_owned();
@@ -250,6 +269,7 @@ impl Spirc {
         let sender = session.mercury().sender(uri);
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+        let (context_event_tx, context_event_rx) = mpsc::unbounded_channel();
 
         let initial_volume = config.initial_volume;
         let task_config = SpircTaskConfig {
@@ -279,6 +299,7 @@ impl Spirc {
             commands: Some(cmd_rx),
             player_events: Some(player_events),
 
+            context_event_sender: context_event_tx,
             shutdown: false,
             session,
 
@@ -298,7 +319,7 @@ impl Spirc {
 
         task.hello();
 
-        (spirc, task.run())
+        (spirc, task.run(), context_event_rx)
     }
 
     pub fn play(&self) {
@@ -676,7 +697,9 @@ impl SpircTask {
                             rest.shuffle(&mut rng);
                         }
                     }
-                    self.state.set_playing_track_index(0);
+                    self.watch_context_changes(|s| {
+                      s.state.set_playing_track_index(0);
+                    });
                 } else {
                     let context = self.state.get_context_uri();
                     debug!("{:?}", context);
@@ -915,12 +938,16 @@ impl SpircTask {
         }
 
         if tracks_len > 0 {
-            self.state.set_playing_track_index(new_index);
-            self.load_track(continue_playing, 0);
+            self.watch_context_changes(|s| {
+                s.state.set_playing_track_index(new_index);
+                s.load_track(continue_playing, 0);
+            });
         } else {
             info!("Not playing next track because there are no more tracks left in queue.");
-            self.state.set_playing_track_index(0);
-            self.state.set_status(PlayStatus::kPlayStatusStop);
+            self.watch_context_changes(|s| {
+                s.state.set_playing_track_index(0);
+                s.state.set_status(PlayStatus::kPlayStatusStop);
+            });
             self.player.stop();
             self.play_status = SpircPlayStatus::Stopped;
         }
@@ -956,8 +983,9 @@ impl SpircTask {
                 self.state.mut_track().insert(pos, track);
                 pos += 1;
             }
-
-            self.state.set_playing_track_index(new_index);
+            self.watch_context_changes(|s| {
+              s.state.set_playing_track_index(new_index);
+            });
 
             self.load_track(true, 0);
         } else {
@@ -1061,7 +1089,9 @@ impl SpircTask {
                 .get_playing_track_index()
                 .checked_sub(CONTEXT_TRACKS_HISTORY as u32)
             {
-                self.state.set_playing_track_index(new_index);
+                self.watch_context_changes(|s| {
+                    s.state.set_playing_track_index(new_index);
+                });
             }
         } else {
             warn!("No context to update from!");
@@ -1084,9 +1114,11 @@ impl SpircTask {
             self.autoplay_fut = self.resolve_autoplay_uri(&context_uri);
         }
 
-        self.state.set_playing_track_index(index);
-        self.state.set_track(tracks.iter().cloned().collect());
-        self.state.set_context_uri(context_uri);
+        self.watch_context_changes(|s| {
+            s.state.set_playing_track_index(index);
+            s.state.set_track(tracks.iter().cloned().collect());
+            s.state.set_context_uri(context_uri);
+        });
         // has_shuffle/repeat seem to always be true in these replace msgs,
         // but to replicate the behaviour of the Android client we have to
         // ignore false values.
@@ -1180,18 +1212,20 @@ impl SpircTask {
 
         match self.get_track_id_to_play_from_playlist(index) {
             Some((track, index)) => {
-                self.state.set_playing_track_index(index);
+                self.watch_context_changes(|s| {
+                    s.state.set_playing_track_index(index);
 
-                self.play_request_id = Some(self.player.load(track, start_playing, position_ms));
+                    s.play_request_id = Some(s.player.load(track, start_playing, position_ms));
 
-                self.update_state_position(position_ms);
-                if start_playing {
-                    self.state.set_status(PlayStatus::kPlayStatusPlay);
-                    self.play_status = SpircPlayStatus::LoadingPlay { position_ms };
-                } else {
-                    self.state.set_status(PlayStatus::kPlayStatusPause);
-                    self.play_status = SpircPlayStatus::LoadingPause { position_ms };
-                }
+                    s.update_state_position(position_ms);
+                    if start_playing {
+                        s.state.set_status(PlayStatus::kPlayStatusPlay);
+                        s.play_status = SpircPlayStatus::LoadingPlay { position_ms };
+                    } else {
+                        s.state.set_status(PlayStatus::kPlayStatusPause);
+                        s.play_status = SpircPlayStatus::LoadingPause { position_ms };
+                    }
+                });
             }
             None => {
                 self.state.set_status(PlayStatus::kPlayStatusStop);
@@ -1230,6 +1264,17 @@ impl SpircTask {
             cache.save_volume(volume)
         }
         self.player.emit_volume_set_event(volume);
+    }
+
+    fn watch_context_changes(&mut self, block: impl FnOnce(&mut Self)) {
+        let notify = self.context_event_sender.clone();
+        let old_state = ContextChangedEvent::from_state(&self.state);
+        block(self);
+        let new_state = ContextChangedEvent::from_state(&self.state);
+        if old_state != new_state {
+            // TODO: error handling
+            let _ = notify.send(new_state);
+        }
     }
 }
 
