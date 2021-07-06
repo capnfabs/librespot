@@ -91,6 +91,7 @@ pub enum SpircCommand {
     Play,
     PlayPause,
     Pause,
+    Stop,
     Prev,
     Next,
     VolumeUp,
@@ -331,6 +332,9 @@ impl Spirc {
     pub fn pause(&self) {
         let _ = self.commands.send(SpircCommand::Pause);
     }
+    pub fn stop(&self) {
+        let _ = self.commands.send(SpircCommand::Stop);
+    }
     pub fn prev(&self) {
         let _ = self.commands.send(SpircCommand::Prev);
     }
@@ -465,6 +469,15 @@ impl SpircTask {
                     CommandSender::new(self, MessageType::kMessageTypePause).send();
                 }
             }
+            SpircCommand::Stop => {
+                if active {
+                    self.handle_stop();
+                    self.notify(None, true);
+                } else {
+                    // do nothing; there's no Stop command that we can send.
+                    warn!("Not active, not stopping");
+                }
+            },
             SpircCommand::Prev => {
                 if active {
                     self.handle_prev();
@@ -579,10 +592,7 @@ impl SpircTask {
                     PlayerEvent::Stopped { .. } => match self.play_status {
                         SpircPlayStatus::Stopped => (),
                         _ => {
-                            warn!("The player has stopped unexpectedly.");
-                            self.state.set_status(PlayStatus::kPlayStatusStop);
-                            self.notify(None, true);
-                            self.play_status = SpircPlayStatus::Stopped;
+                            self.handle_stop();
                         }
                     },
                     PlayerEvent::TimeToPreloadNextTrack { .. } => self.handle_preload_next_track(),
@@ -816,6 +826,14 @@ impl SpircTask {
             }
             _ => (),
         }
+    }
+
+    fn handle_stop(&mut self) {
+        self.state.set_status(PlayStatus::kPlayStatusStop);
+        self.ensure_mixer_stopped();
+        self.notify(None, true);
+        self.player.stop();
+        self.play_status = SpircPlayStatus::Stopped;
     }
 
     fn handle_seek(&mut self, position_ms: u32) {
