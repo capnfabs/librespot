@@ -25,6 +25,9 @@ use librespot::playback::player::{coefficient_to_duration, duration_to_coefficie
 mod player_event_handler;
 use player_event_handler::{emit_sink_event, run_program_on_events};
 
+mod action_channel;
+use action_channel::ActionChannelTask;
+
 use std::env;
 use std::ops::RangeInclusive;
 use std::path::Path;
@@ -1569,6 +1572,8 @@ fn get_setup() -> Setup {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    console_subscriber::init();
+
     const RUST_BACKTRACE: &str = "RUST_BACKTRACE";
     const RECONNECT_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(600);
     const RECONNECT_RATE_LIMIT: usize = 5;
@@ -1583,6 +1588,8 @@ async fn main() {
     let mut spirc: Option<Spirc> = None;
     let mut spirc_task: Option<Pin<_>> = None;
     let mut player_event_channel: Option<UnboundedReceiver<PlayerEvent>> = None;
+    let mut action_channel_task: Option<ActionChannelTask> = None;
+    let mut action_channel: Option<UnboundedReceiver<String>> = None;
     let mut auto_connect_times: Vec<Instant> = vec![];
     let mut discovery = None;
     let mut connecting: Pin<Box<dyn future::FusedFuture<Output = _>>> = Box::pin(future::pending());
@@ -1693,6 +1700,10 @@ async fn main() {
                     spirc = Some(spirc_);
                     spirc_task = Some(Box::pin(spirc_task_));
                     player_event_channel = Some(event_channel);
+
+                    let (act, chan) = ActionChannelTask::new();
+                    action_channel_task = Some(act);
+                    action_channel = Some(chan);
                 },
                 Err(e) => {
                     error!("Connection failed: {}", e);
@@ -1765,6 +1776,22 @@ async fn main() {
                     player_event_channel = None;
                 }
             },
+            // This probably doesn't need to be async established, we can probably
+            // _always_ have it running.
+            event = async {
+                match action_channel.as_mut() {
+                    Some(p) => p.recv().await,
+                    _ => None
+                }
+            }, if action_channel.is_some() => match event {
+                Some(event) => {
+                    println!("Run event {event:?}");
+                },
+                None => {
+                    println!("Clearing the action channel");
+                    action_channel = None;
+                }
+            },
             _ = tokio::signal::ctrl_c() => {
                 break;
             },
@@ -1774,16 +1801,25 @@ async fn main() {
 
     info!("Gracefully shutting down");
 
+    if let Some(act) = action_channel_task.take() {
+        act.shutdown().await;
+    }
+    info!("Shut down the action channel");
+
     // Shutdown spirc if necessary
     if let Some(spirc) = spirc {
+        info!("Calling shutdown");
         spirc.shutdown();
+        info!("Shutdown down");
 
         if let Some(mut spirc_task) = spirc_task {
+            info!("Spirc task still exists");
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => (),
                 _ = spirc_task.as_mut() => (),
                 else => (),
             }
         }
+        info!("Ok truly exiting now");
     }
 }

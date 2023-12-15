@@ -58,9 +58,11 @@ hyper = "0.14"
 log = "0.4"
 rpassword = "6.0"
 thiserror = "1.0"
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "signal", "sync", "process"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "signal", "sync", "process", "fs", "tracing"] }
+console-subscriber = "0.2.0"
 url = "2.2"
 sha-1 = "0.9"
+nix = { version = "0.27.1", features = ["fs"] }
 
 [features]
 alsa-backend = ["librespot-playback/alsa-backend"]
