@@ -37,6 +37,8 @@ use std::str::FromStr;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::action_channel::Command;
+
 fn device_id(name: &str) -> String {
     hex::encode(Sha1::digest(name.as_bytes()))
 }
@@ -1572,8 +1574,6 @@ fn get_setup() -> Setup {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    console_subscriber::init();
-
     const RUST_BACKTRACE: &str = "RUST_BACKTRACE";
     const RECONNECT_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(600);
     const RECONNECT_RATE_LIMIT: usize = 5;
@@ -1589,7 +1589,7 @@ async fn main() {
     let mut spirc_task: Option<Pin<_>> = None;
     let mut player_event_channel: Option<UnboundedReceiver<PlayerEvent>> = None;
     let mut action_channel_task: Option<ActionChannelTask> = None;
-    let mut action_channel: Option<UnboundedReceiver<String>> = None;
+    let mut action_channel: Option<UnboundedReceiver<Command>> = None;
     let mut auto_connect_times: Vec<Instant> = vec![];
     let mut discovery = None;
     let mut connecting: Pin<Box<dyn future::FusedFuture<Output = _>>> = Box::pin(future::pending());
@@ -1786,6 +1786,20 @@ async fn main() {
             }, if action_channel.is_some() => match event {
                 Some(event) => {
                     println!("Run event {event:?}");
+                    if let Some(spirc) = &spirc {
+                        match event {
+                            Command::Unknown => {},
+                            Command::Prev => {spirc.prev()},
+                            Command::Next => {spirc.next()},
+                            Command::PlayPause => {spirc.play_pause()},
+                            Command::VolUp => {spirc.volume_up()},
+                            Command::VolDown => {spirc.volume_down()},
+                            Command::Load{ spotify_id } => {
+                                // We don't support this yet, need to do spotify API shenanigans
+                                // https://github.com/Spotifyd/spotifyd/blob/c0620c5309645c133e6cbdd693bc6d48dab4f501/src/dbus_mpris.rs#L348
+                            },
+                        }
+                    }
                 },
                 None => {
                     println!("Clearing the action channel");
@@ -1802,7 +1816,7 @@ async fn main() {
     info!("Gracefully shutting down");
 
     if let Some(act) = action_channel_task.take() {
-        act.shutdown().await;
+        act.shutdown();
     }
     info!("Shut down the action channel");
 
