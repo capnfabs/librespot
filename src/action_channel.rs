@@ -51,6 +51,12 @@ So this mad construction is: we just ignore tokio for the "action channel", and 
 shut down, we still need to ensure that we unblock the reader. So, we flip a bool flag,
 then open the file a few times in nonblocking mode and shut them again immediately
 to unblock the rest of the loop and shut everything down. Gross.
+
+Note that this will still hang indefinitely on shutdown if there's some other program that's
+got the fifo open (it's waiting for data or something).
+
+FIFO was probably the wrong construct for this. Maybe a socket or some actual IPC
+library, idk. I thought it would be easy.
 */
 impl ActionChannelTask {
     pub fn shutdown(self) {

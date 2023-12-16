@@ -1588,8 +1588,11 @@ async fn main() {
     let mut spirc: Option<Spirc> = None;
     let mut spirc_task: Option<Pin<_>> = None;
     let mut player_event_channel: Option<UnboundedReceiver<PlayerEvent>> = None;
-    let mut action_channel_task: Option<ActionChannelTask> = None;
-    let mut action_channel: Option<UnboundedReceiver<Command>> = None;
+
+    let (act, chan) = ActionChannelTask::new();
+    let action_channel_task: ActionChannelTask = act;
+    let mut action_channel: UnboundedReceiver<Command> = chan;
+
     let mut auto_connect_times: Vec<Instant> = vec![];
     let mut discovery = None;
     let mut connecting: Pin<Box<dyn future::FusedFuture<Output = _>>> = Box::pin(future::pending());
@@ -1700,10 +1703,6 @@ async fn main() {
                     spirc = Some(spirc_);
                     spirc_task = Some(Box::pin(spirc_task_));
                     player_event_channel = Some(event_channel);
-
-                    let (act, chan) = ActionChannelTask::new();
-                    action_channel_task = Some(act);
-                    action_channel = Some(chan);
                 },
                 Err(e) => {
                     error!("Connection failed: {}", e);
@@ -1778,32 +1777,31 @@ async fn main() {
             },
             // This probably doesn't need to be async established, we can probably
             // _always_ have it running.
-            event = async {
-                match action_channel.as_mut() {
-                    Some(p) => p.recv().await,
-                    _ => None
-                }
-            }, if action_channel.is_some() => match event {
+            event = action_channel.recv() => match event {
                 Some(event) => {
-                    println!("Run event {event:?}");
-                    if let Some(spirc) = &spirc {
-                        match event {
-                            Command::Unknown => {},
-                            Command::Prev => {spirc.prev()},
-                            Command::Next => {spirc.next()},
-                            Command::PlayPause => {spirc.play_pause()},
-                            Command::VolUp => {spirc.volume_up()},
-                            Command::VolDown => {spirc.volume_down()},
-                            Command::Load{ spotify_id } => {
-                                // We don't support this yet, need to do spotify API shenanigans
-                                // https://github.com/Spotifyd/spotifyd/blob/c0620c5309645c133e6cbdd693bc6d48dab4f501/src/dbus_mpris.rs#L348
-                            },
+                    match &spirc {
+                        Some(spirc) => {
+                            info!("Running event {event:?}");
+                            match event {
+                                Command::Unknown => {},
+                                Command::Prev => {spirc.prev()},
+                                Command::Next => {spirc.next()},
+                                Command::PlayPause => {spirc.play_pause()},
+                                Command::VolUp => {spirc.volume_up()},
+                                Command::VolDown => {spirc.volume_down()},
+                                Command::Load{ spotify_id } => {
+                                    // We don't support this yet, need to do spotify API shenanigans
+                                    // https://github.com/Spotifyd/spotifyd/blob/c0620c5309645c133e6cbdd693bc6d48dab4f501/src/dbus_mpris.rs#L348
+                                },
+                            }
+                        },
+                        None => {
+                            info!("Skipping event {event:?} because spirc isn't running")
                         }
                     }
                 },
                 None => {
-                    println!("Clearing the action channel");
-                    action_channel = None;
+                    panic!("Action channel closed while in main loop, probably an error!")
                 }
             },
             _ = tokio::signal::ctrl_c() => {
@@ -1815,9 +1813,8 @@ async fn main() {
 
     info!("Gracefully shutting down");
 
-    if let Some(act) = action_channel_task.take() {
-        act.shutdown();
-    }
+    action_channel_task.shutdown();
+
     info!("Shut down the action channel");
 
     // Shutdown spirc if necessary
