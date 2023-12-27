@@ -57,11 +57,13 @@ hex = "0.4"
 hyper = "0.14"
 log = "0.4"
 rpassword = "6.0"
+rspotify = "0.12.0"
 thiserror = "1.0"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "signal", "sync", "process", "fs"] }
 url = "2.2"
 sha-1 = "0.9"
-nix = { version = "0.27.1", features = ["fs"] }
+percent-encoding = "2.3.1"
+chrono = "0.4.31"
 
 [features]
 alsa-backend = ["librespot-playback/alsa-backend"]

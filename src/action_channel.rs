@@ -21,7 +21,7 @@ fn parse_line(line: String) -> Command {
         "Prev" => Command::Prev,
         "VolUp"=> Command::VolUp,
         "VolDown"=> Command::VolDown,
-        load_line if line.starts_with("load:") => Command::Load { spotify_id: load_line.trim_start_matches("load:").to_string() },
+        load_line if line.starts_with("Load/") => Command::Load { spotify_id: load_line.trim_start_matches("Load/").to_string() },
         _ => Command::Unknown,
     }
 }

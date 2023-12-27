@@ -28,6 +28,8 @@ use player_event_handler::{emit_sink_event, run_program_on_events};
 mod action_channel;
 use action_channel::ActionChannelTask;
 
+mod spotify_web;
+
 use std::env;
 use std::ops::RangeInclusive;
 use std::path::Path;
@@ -38,6 +40,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::action_channel::Command;
+use crate::spotify_web::WebApi;
 
 fn device_id(name: &str) -> String {
     hex::encode(Sha1::digest(name.as_bytes()))
@@ -1649,6 +1652,8 @@ async fn main() {
         exit(1);
     }
 
+    let mut webapi: Option<WebApi> = None;
+
     loop {
         tokio::select! {
             credentials = async {
@@ -1698,6 +1703,8 @@ async fn main() {
                         Player::new(player_config, session.clone(), soft_volume, move || {
                             (backend)(device, format)
                         });
+
+                    webapi = Some(WebApi::new(session.clone(), connect_config.name.clone()));
 
                     if setup.emit_sink_events {
                         if let Some(player_event_program) = setup.player_event_program.clone() {
@@ -1798,25 +1805,24 @@ async fn main() {
             },
             event = action_channel.recv() => match event {
                 Some(event) => {
-                    match &spirc {
-                        Some(spirc) => {
-                            info!("Running event {event:?}");
-                            match event {
-                                Command::Unknown => {},
-                                Command::Prev => {spirc.prev()},
-                                Command::Next => {spirc.next()},
-                                Command::PlayPause => {spirc.play_pause()},
-                                Command::VolUp => {spirc.volume_up()},
-                                Command::VolDown => {spirc.volume_down()},
-                                Command::Load{ spotify_id } => {
-                                    // We don't support this yet, need to do spotify API shenanigans
-                                    // https://github.com/Spotifyd/spotifyd/blob/c0620c5309645c133e6cbdd693bc6d48dab4f501/src/dbus_mpris.rs#L348
-                                },
+                    info!("Running event {event:?}");
+                    match event {
+                        Command::Unknown => {},
+                        Command::Prev => {spirc_map(&spirc, &event, |s| s.prev())},
+                        Command::Next => {spirc_map(&spirc, &event, |s| s.next())},
+                        Command::PlayPause => {spirc_map(&spirc, &event, |s| s.play_pause())},
+                        Command::VolUp => {spirc_map(&spirc, &event, |s| s.volume_up())},
+                        Command::VolDown => {spirc_map(&spirc, &event, |s| s.volume_down())},
+                        Command::Load{ spotify_id } => {
+                            match &webapi {
+                                Some(webapi) => {
+                                    webapi.open_uri(spotify_id).await.unwrap();
+                                }
+                                None => {
+                                    info!("Skipping load because web api not available");
+                                }
                             }
                         },
-                        None => {
-                            info!("Skipping event {event:?} because spirc isn't running")
-                        }
                     }
                 },
                 None => {
@@ -1853,5 +1859,17 @@ async fn main() {
             }
         }
         info!("Ok truly exiting now");
+    }
+}
+
+
+fn spirc_map(spirc: &Option<Spirc>, event: &Command, f: impl FnOnce(&Spirc) -> ()) {
+    match &spirc {
+        Some(spirc) => {
+            f(spirc)
+        },
+        None => {
+            info!("Skipping event {event:?} because spirc isn't running")
+        }
     }
 }
