@@ -186,6 +186,7 @@ struct Setup {
     zeroconf_port: u16,
     player_event_program: Option<String>,
     emit_sink_events: bool,
+    command_port: u16,
 }
 
 fn get_setup() -> Setup {
@@ -239,6 +240,7 @@ fn get_setup() -> Setup {
     const VOLUME_CTRL: &str = "volume-ctrl";
     const VOLUME_RANGE: &str = "volume-range";
     const ZEROCONF_PORT: &str = "zeroconf-port";
+    const COMMAND_PORT: &str = "command-port";
 
     // Mostly arbitrary.
     const AUTOPLAY_SHORT: &str = "A";
@@ -565,6 +567,11 @@ fn get_setup() -> Setup {
         AP_PORT,
         "Connect to an AP with a specified port 1 - 65535. If no AP with that port is present a fallback AP will be used. Available ports are usually 80, 443 and 4070.",
         "PORT",
+    ).optopt(
+        "",
+        COMMAND_PORT,
+        "Port to listen for remote commands. Defaults to 2777",
+        "PORT",
     );
 
     let args: Vec<_> = std::env::args_os()
@@ -771,6 +778,17 @@ fn get_setup() -> Setup {
             empty_string_error_msg(DEVICE, DEVICE_SHORT);
         }
     }
+
+    let command_port = opt_str(COMMAND_PORT)
+            .map(|port| match port.parse::<u16>() {
+                Ok(value) if value != 0 => value,
+                _ => {
+                    let valid_values = &format!("1 - {}", u16::MAX);
+                    invalid_error_msg(COMMAND_PORT, "", &port, valid_values, "");
+                    exit(1);
+                }
+            })
+            .unwrap_or(2777);
 
     #[cfg(feature = "alsa-backend")]
     let mixer_type = opt_str(MIXER_TYPE);
@@ -1569,6 +1587,7 @@ fn get_setup() -> Setup {
         zeroconf_port,
         player_event_program,
         emit_sink_events,
+        command_port,
     }
 }
 
@@ -1589,8 +1608,10 @@ async fn main() {
     let mut spirc_task: Option<Pin<_>> = None;
     let mut player_event_channel: Option<UnboundedReceiver<PlayerEvent>> = None;
 
-    let (act, chan) = ActionChannelTask::new();
-    let action_channel_task: ActionChannelTask = act;
+    let command_port = setup.command_port;
+
+    let (act, chan) = ActionChannelTask::new(format!("127.0.0.1:{command_port}"));
+    let action_channel_task: ActionChannelTask<_> = act;
     let mut action_channel: UnboundedReceiver<Command> = chan;
 
     let mut auto_connect_times: Vec<Instant> = vec![];
@@ -1775,8 +1796,6 @@ async fn main() {
                     player_event_channel = None;
                 }
             },
-            // This probably doesn't need to be async established, we can probably
-            // _always_ have it running.
             event = action_channel.recv() => match event {
                 Some(event) => {
                     match &spirc {
@@ -1804,6 +1823,9 @@ async fn main() {
                     panic!("Action channel closed while in main loop, probably an error!")
                 }
             },
+            result = action_channel_task.listen() => {
+                unimplemented!("Error handling goes here {result:?}")
+            },
             _ = tokio::signal::ctrl_c() => {
                 break;
             },
@@ -1811,17 +1833,16 @@ async fn main() {
         }
     }
 
-    info!("Gracefully shutting down");
+    info!("Gracefully shutting down...");
 
     action_channel_task.shutdown();
 
-    info!("Shut down the action channel");
+    info!("Shut down the action channel!");
 
     // Shutdown spirc if necessary
     if let Some(spirc) = spirc {
-        info!("Calling shutdown");
+        info!("Shutting down spirc");
         spirc.shutdown();
-        info!("Shutdown down");
 
         if let Some(mut spirc_task) = spirc_task {
             info!("Spirc task still exists");
