@@ -9,6 +9,8 @@ pub enum Command {
     Prev,
     Next,
     PlayPause,
+    Pause,
+    Play,
     VolUp,
     VolDown,
     Load {spotify_id: String},
@@ -17,6 +19,8 @@ pub enum Command {
 fn parse_line(line: String) -> Command {
     match line.as_str() {
         "PlayPause" => Command::PlayPause,
+        "Play" => Command::Play,
+        "Pause" => Command::Pause,
         "Next" => Command::Next,
         "Prev" => Command::Prev,
         "VolUp"=> Command::VolUp,

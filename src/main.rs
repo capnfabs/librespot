@@ -1811,6 +1811,8 @@ async fn main() {
                         Command::Prev => {spirc_map(&spirc, &event, |s| s.prev())},
                         Command::Next => {spirc_map(&spirc, &event, |s| s.next())},
                         Command::PlayPause => {spirc_map(&spirc, &event, |s| s.play_pause())},
+                        Command::Play => {spirc_map(&spirc, &event, |s| s.play())},
+                        Command::Pause => {spirc_map(&spirc, &event, |s| s.pause())},
                         Command::VolUp => {spirc_map(&spirc, &event, |s| s.volume_up())},
                         Command::VolDown => {spirc_map(&spirc, &event, |s| s.volume_down())},
                         Command::Load{ spotify_id } => {
