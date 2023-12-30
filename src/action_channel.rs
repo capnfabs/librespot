@@ -1,6 +1,7 @@
 use std::io;
 
 use tokio::{sync::{mpsc::{self, UnboundedReceiver, UnboundedSender}, watch}, net::{TcpListener, TcpStream, ToSocketAddrs}, select, io::{BufReader, AsyncBufReadExt}};
+use log::warn;
 
 
 #[derive(Debug)]
@@ -13,7 +14,7 @@ pub enum Command {
     Play,
     VolUp,
     VolDown,
-    Load {spotify_id: String},
+    Load {spotify_id: String, shuffle: bool},
 }
 
 fn parse_line(line: String) -> Command {
@@ -25,7 +26,25 @@ fn parse_line(line: String) -> Command {
         "Prev" => Command::Prev,
         "VolUp"=> Command::VolUp,
         "VolDown"=> Command::VolDown,
-        load_line if line.starts_with("Load/") => Command::Load { spotify_id: load_line.trim_start_matches("Load/").to_string() },
+        load_line if line.starts_with("Load/") => {
+            let load_line = load_line.trim_start_matches("Load/");
+            let mut sp = load_line.split("/");
+            let Some(spotify_id) = sp.next() else {
+                warn!("Got bad protocol message: {line}");
+                return Command::Unknown;
+            };
+            let spotify_id = spotify_id.to_string();
+            let shuffle_marker = sp.next();
+            if shuffle_marker.is_some_and(|text| text != "shuffle") {
+                warn!("Got bad protocol message: expected shuffle marker '/shuffle' or no suffix: {line}");
+                return Command::Unknown;
+            }
+            let shuffle = shuffle_marker.is_some_and(|text| text == "shuffle");
+            Command::Load {
+                spotify_id,
+                shuffle,
+            }
+        },
         _ => Command::Unknown,
     }
 }

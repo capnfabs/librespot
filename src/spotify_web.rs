@@ -23,7 +23,7 @@ impl WebApi {
         }
     }
 
-    pub async fn open_uri(&self, uri: String) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn open_uri(&self, uri: &str, shuffle: bool) -> Result<(), Box<dyn std::error::Error>> {
         let device_name = utf8_percent_encode(&self.device_name, NON_ALPHANUMERIC).to_string();
         let token = self.ensure_fresh_token().await.ok_or("No token")?;
         let sp = create_spotify_api(token);
@@ -33,17 +33,21 @@ impl WebApi {
             .find(|d| d.name == device_name)
             .map(|device| device.id).flatten();
         if uri.contains("spotify:track") {
-            let playable_track: PlayableId = TrackId::from_uri(&uri)?.into();
+            let playable_track: PlayableId = TrackId::from_uri(uri)?.into();
+            // This is just one song so don't mess with shuffle
             sp.start_uris_playback([playable_track], device_id.as_deref(), None, None).await?;
         } else {
-            let (id_type, _id) = parse_uri(&uri)?;
+            let (id_type, _id) = parse_uri(uri)?;
             let id: PlayContextId = match id_type {
-                Type::Album => AlbumId::from_id_or_uri(&uri)?.into(),
-                Type::Playlist => PlaylistId::from_id_or_uri(&uri)?.into(),
+                Type::Album => AlbumId::from_id_or_uri(uri)?.into(),
+                Type::Playlist => PlaylistId::from_id_or_uri(uri)?.into(),
                 _default => {
                     Err(format!("Couldn't resolve URI {uri}"))?
                 }
             };
+            // This is a set of songs so mess with shuffle
+            info!("Setting shuffle: {shuffle:?}");
+            sp.shuffle(shuffle, device_id.as_deref()).await?;
             sp.start_context_playback(id, device_id.as_deref(), None, None).await?;
         };
         Ok(())

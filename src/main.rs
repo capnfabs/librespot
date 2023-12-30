@@ -1805,23 +1805,36 @@ async fn main() {
             },
             event = action_channel.recv() => match event {
                 Some(event) => {
+                    macro_rules! spirc_map {
+                        ($e:expr) => ({
+                            fn call(spirc: &Spirc, f: impl FnOnce(&Spirc) -> ()) {f(spirc)}
+                            match &spirc {
+                                Some(spirc) => {
+                                    call(spirc, $e);
+                                },
+                                None => {
+                                    info!("Skipping event {event:?} because spirc isn't running")
+                                }
+                            }
+                        })
+                    }
                     info!("Running event {event:?}");
-                    match event {
+                    match &event {
                         Command::Unknown => {},
-                        Command::Prev => {spirc_map(&spirc, &event, |s| s.prev())},
-                        Command::Next => {spirc_map(&spirc, &event, |s| s.next())},
-                        Command::PlayPause => {spirc_map(&spirc, &event, |s| s.play_pause())},
-                        Command::Play => {spirc_map(&spirc, &event, |s| s.play())},
-                        Command::Pause => {spirc_map(&spirc, &event, |s| s.pause())},
-                        Command::VolUp => {spirc_map(&spirc, &event, |s| s.volume_up())},
-                        Command::VolDown => {spirc_map(&spirc, &event, |s| s.volume_down())},
-                        Command::Load{ spotify_id } => {
+                        Command::Prev => {spirc_map!(|s| s.prev())},
+                        Command::Next => {spirc_map!(|s| s.next())},
+                        Command::PlayPause => {spirc_map!(|s| s.play_pause())},
+                        Command::Play => {spirc_map!(|s| s.play())},
+                        Command::Pause => {spirc_map!(|s| s.pause())},
+                        Command::VolUp => {spirc_map!(|s| s.volume_up())},
+                        Command::VolDown => {spirc_map!(|s| s.volume_down())},
+                        Command::Load{ spotify_id, shuffle } => {
                             match &webapi {
                                 Some(webapi) => {
-                                    webapi.open_uri(spotify_id).await.unwrap();
-                                }
+                                    webapi.open_uri(spotify_id, *shuffle).await.unwrap();
+                                },
                                 None => {
-                                    info!("Skipping load because web api not available");
+                                    info!("Skipping event {event:?} because web api isn't available")
                                 }
                             }
                         },
@@ -1861,17 +1874,5 @@ async fn main() {
             }
         }
         info!("Ok truly exiting now");
-    }
-}
-
-
-fn spirc_map(spirc: &Option<Spirc>, event: &Command, f: impl FnOnce(&Spirc) -> ()) {
-    match &spirc {
-        Some(spirc) => {
-            f(spirc)
-        },
-        None => {
-            info!("Skipping event {event:?} because spirc isn't running")
-        }
     }
 }
