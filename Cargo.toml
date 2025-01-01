@@ -55,15 +55,19 @@ path = "oauth"
 version = "0.6.0"
 
 [dependencies]
+chrono = "0.4.31"
 data-encoding = "2.5"
 env_logger =  { version = "0.11.2", default-features = false, features = ["color", "humantime", "auto-color"] }
 futures-util = { version = "0.3", default-features = false }
 getopts = "0.2"
 log = "0.4"
+percent-encoding = "2.3.1"
+rpassword = "6.0"
+rspotify = "0.12.0"
 sha1 = "0.10"
 sysinfo = { version = "0.31.3", default-features = false, features = ["system"] }
 thiserror = "1.0"
-tokio = { version = "1.40", features = ["rt", "macros", "signal", "sync", "parking_lot", "process"] }
+tokio = { version = "1.40", features = ["rt", "rt-multi-thread", "macros", "signal", "sync", "parking_lot", "process", "fs"] }
 url = "2.2"
 
 [features]
