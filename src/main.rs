@@ -2,6 +2,7 @@ use data_encoding::HEXLOWER;
 use futures_util::StreamExt;
 use log::{debug, error, info, trace, warn};
 use sha1::{Digest, Sha1};
+use tokio::sync::mpsc::UnboundedReceiver;
 use std::{
     env,
     fs::create_dir_all,
@@ -39,6 +40,14 @@ use librespot::playback::mixer::alsamixer::AlsaMixer;
 
 mod player_event_handler;
 use player_event_handler::{run_program_on_sink_events, EventHandler};
+
+mod action_channel;
+use action_channel::ActionChannelTask;
+
+mod spotify_web;
+
+use crate::action_channel::Command;
+use crate::spotify_web::WebApi;
 
 fn device_id(name: &str) -> String {
     HEXLOWER.encode(&Sha1::digest(name.as_bytes()))
@@ -218,6 +227,7 @@ struct Setup {
     emit_sink_events: bool,
     zeroconf_ip: Vec<std::net::IpAddr>,
     zeroconf_backend: Option<DnsSdServiceBuilder>,
+    command_port: u16,
 }
 
 fn get_setup() -> Setup {
@@ -279,6 +289,7 @@ fn get_setup() -> Setup {
     const ZEROCONF_PORT: &str = "zeroconf-port";
     const ZEROCONF_INTERFACE: &str = "zeroconf-interface";
     const ZEROCONF_BACKEND: &str = "zeroconf-backend";
+    const COMMAND_PORT: &str = "command-port";
 
     // Mostly arbitrary.
     const AP_PORT_SHORT: &str = "a";
@@ -647,6 +658,12 @@ fn get_setup() -> Setup {
         ZEROCONF_BACKEND,
         "Zeroconf (MDNS/DNS-SD) backend to use. Valid values are 'avahi', 'dns-sd' and 'libmdns', if librespot is compiled with the corresponding feature flags.",
         "BACKEND"
+    )
+    .optopt(
+        "",
+        COMMAND_PORT,
+        "Port to listen for remote commands. Defaults to 2777",
+        "PORT",
     );
 
     #[cfg(feature = "passthrough-decoder")]
@@ -880,6 +897,17 @@ fn get_setup() -> Setup {
             empty_string_error_msg(DEVICE, DEVICE_SHORT);
         }
     }
+
+    let command_port = opt_str(COMMAND_PORT)
+            .map(|port| match port.parse::<u16>() {
+                Ok(value) if value != 0 => value,
+                _ => {
+                    let valid_values = &format!("1 - {}", u16::MAX);
+                    invalid_error_msg(COMMAND_PORT, "", &port, valid_values, "");
+                    exit(1);
+                }
+            })
+            .unwrap_or(2777);
 
     #[cfg(feature = "alsa-backend")]
     let mixer_type = opt_str(MIXER_TYPE);
@@ -1816,6 +1844,7 @@ fn get_setup() -> Setup {
         emit_sink_events,
         zeroconf_ip,
         zeroconf_backend,
+        command_port,
     }
 }
 
@@ -1835,12 +1864,20 @@ async fn main() {
     let mut last_credentials = None;
     let mut spirc: Option<Spirc> = None;
     let mut spirc_task: Option<Pin<_>> = None;
+
+    let command_port = setup.command_port;
+
+    let (act, chan) = ActionChannelTask::new(format!("127.0.0.1:{command_port}"));
+    let action_channel_task: ActionChannelTask<_> = act;
+    let mut action_channel: UnboundedReceiver<Command> = chan;
+
     let mut auto_connect_times: Vec<Instant> = vec![];
     let mut discovery = None;
     let mut connecting = false;
     let mut _event_handler: Option<EventHandler> = None;
 
     let mut session = Session::new(setup.session_config.clone(), setup.cache.clone());
+    let mut webapi: Option<WebApi> = Some(WebApi::new(session.clone(), setup.connect_config.name.clone()));
 
     let mut sys = System::new();
 
@@ -1975,6 +2012,8 @@ async fn main() {
                 if session.is_invalid() {
                     session = Session::new(setup.session_config.clone(), setup.cache.clone());
                     player.set_session(session.clone());
+
+                    webapi = Some(WebApi::new(session.clone(), setup.connect_config.name.clone()));
                 }
 
                 let connect_config = setup.connect_config.clone();
@@ -2024,6 +2063,50 @@ async fn main() {
                 error!("Player shut down unexpectedly");
                 exit(1);
             },
+            event = action_channel.recv() => match event {
+                Some(event) => {
+                    macro_rules! spirc_map {
+                        ($e:expr) => ({
+                            fn call(spirc: &Spirc, f: impl FnOnce(&Spirc) -> ()) {f(spirc)}
+                            match &spirc {
+                                Some(spirc) => {
+                                    call(spirc, $e);
+                                },
+                                None => {
+                                    info!("Skipping event {event:?} because spirc isn't running")
+                                }
+                            }
+                        })
+                    }
+                    info!("Running event {event:?}");
+                    match &event {
+                        Command::Unknown => {},
+                        Command::Prev => {spirc_map!(|s| {let _ = s.prev(); } )},
+                        Command::Next => {spirc_map!(|s| {let _ = s.next();} )},
+                        Command::PlayPause => {spirc_map!(|s| {let _ = s.play_pause();})},
+                        Command::Play => {spirc_map!(|s| {let _ = s.play();})},
+                        Command::Pause => {spirc_map!(|s| {let _ = s.pause();})},
+                        Command::VolUp => {spirc_map!(|s| {let _ = s.volume_up();})},
+                        Command::VolDown => {spirc_map!(|s| {let _ = s.volume_down();})},
+                        Command::Load{ spotify_id, shuffle } => {
+                            match &webapi {
+                                Some(webapi) => {
+                                    webapi.open_uri(spotify_id, *shuffle).await.unwrap();
+                                },
+                                None => {
+                                    info!("Skipping event {event:?} because web api isn't available")
+                                }
+                            }
+                        },
+                    }
+                },
+                None => {
+                    panic!("Action channel closed while in main loop, probably an error!")
+                }
+            },
+            result = action_channel_task.listen() => {
+                unimplemented!("Error handling goes here {result:?}")
+            },
             _ = tokio::signal::ctrl_c() => {
                 break;
             },
@@ -2032,6 +2115,10 @@ async fn main() {
     }
 
     info!("Gracefully shutting down");
+
+    // TODO: change this to conform to the same interface as other shutdown tasks?
+    action_channel_task.shutdown();
+    info!("Shut down the action channel!");
 
     let mut shutdown_tasks = tokio::task::JoinSet::new();
 
